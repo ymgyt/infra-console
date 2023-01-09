@@ -1,0 +1,5 @@
+extend = [
+    { path = "dev/makefiles/format_makefile.toml" },
+    { path = "dev/makefiles/lint_makefile.toml" },
+    { path = "dev/makefiles/test_makefile.toml" },
+]

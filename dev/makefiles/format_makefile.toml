@@ -1,0 +1,10 @@
+[tasks.fmt]
+description = "Apply format"
+toolchain = "nightly"
+command = "cargo"
+args = ["fmt"]
+
+[tasks."fmt:cargo"]
+description = "Fortmat Cargo.toml"
+command = "cargo"
+args = ["sort", "--workspace"]

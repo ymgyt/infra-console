@@ -1,0 +1,5 @@
+max_width = 100
+attr_fn_like_width = 70
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+unstable_features = true
