@@ -79,6 +79,7 @@ impl App {
         Ok(())
     }
 
+    // Span api handler task, then return channels to communicate.
     fn init_api_handler(
         config: Config,
     ) -> error_stack::Result<(Sender<RequestEvent>, Receiver<ResponseEvent>), AppError> {
