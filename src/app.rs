@@ -18,17 +18,11 @@ pub struct App {
 }
 
 #[derive(Debug, Error)]
-#[error("error {message}")]
-pub struct AppError {
-    message: String,
-}
-
-impl AppError {
-    fn new(message: impl Into<String>) -> Self {
-        AppError {
-            message: message.into(),
-        }
-    }
+pub enum AppError {
+    #[error("terminal io error")]
+    TerminalIo,
+    #[error("configure client error")]
+    ConfigureClient,
 }
 
 impl App {
@@ -42,7 +36,10 @@ impl App {
             mut terminal,
         } = self;
 
-        terminal.clear().unwrap();
+        terminal
+            .clear()
+            .into_report()
+            .change_context(AppError::TerminalIo)?;
 
         let mut input = InputHandler::new(input::EventStream::new());
         let (req_tx, mut res_rx) = Self::init_api_handler(config.clone())?;
@@ -54,7 +51,7 @@ impl App {
             terminal
                 .draw(|f| view.render(f, f.size()))
                 .into_report()
-                .change_context_lazy(|| AppError::new("terminal draw"))?;
+                .change_context_lazy(|| AppError::TerminalIo)?;
 
             tokio::select! {
                 biased; // tokio::select macro feature.
@@ -76,6 +73,7 @@ impl App {
         Ok(())
     }
 
+    // Span api handler task, then return channels to communicate.
     fn init_api_handler(
         config: Config,
     ) -> error_stack::Result<(Sender<RequestEvent>, Receiver<ResponseEvent>), AppError> {
@@ -83,7 +81,7 @@ impl App {
         let (res_tx, res_rx) = mpsc::channel::<ResponseEvent>(10);
 
         let api_handler = ApiHandler::new(config.elasticsearch.unwrap_or_default())
-            .change_context_lazy(|| AppError::new("init api handler"))?;
+            .change_context_lazy(|| AppError::ConfigureClient)?;
 
         tokio::spawn(api_handler.run(req_rx, res_tx));
 
