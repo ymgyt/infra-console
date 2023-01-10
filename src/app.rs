@@ -42,7 +42,10 @@ impl App {
             mut terminal,
         } = self;
 
-        terminal.clear().unwrap();
+        terminal
+            .clear()
+            .into_report()
+            .change_context_lazy(|| AppError::new("terminal clear"))?;
 
         let mut input = InputHandler::new(input::EventStream::new());
         let (req_tx, mut res_rx) = Self::init_api_handler(config.clone())?;
