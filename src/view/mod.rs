@@ -1,14 +1,21 @@
+use std::cell::Cell;
+
+use ascii::AsAsciiStr;
 use component::resource_tab::ResourceTab;
+use crossterm::event::KeyEvent;
 use tokio::sync::mpsc::Sender;
 use tui::{
     layout::{Constraint, Direction::Vertical, Layout, Rect},
+    text::Spans,
     Frame,
 };
 
 use crate::{
     event::api::{RequestEvent, ResponseEvent},
     view::{
-        component::{elasticsearch::ElasticsearchComponent, ComponentKind, ResourceKind},
+        component::{
+            elasticsearch::ElasticsearchComponent, help::HelpComponent, ComponentKind, ResourceKind,
+        },
         style::Styled,
     },
     Config,
@@ -20,6 +27,7 @@ pub(super) mod style;
 pub(crate) struct View {
     resource_tab: ResourceTab,
     elasticsearch: ElasticsearchComponent,
+    help: HelpComponent,
     state: ViewState,
     style: Styled,
 }
@@ -27,6 +35,7 @@ pub(crate) struct View {
 pub(crate) struct ViewState {
     pub(crate) forcused_component: Option<ComponentKind>,
     pub(crate) selected_resource: Option<ResourceKind>,
+    pub(crate) last_input_key: Cell<Option<KeyEvent>>,
 }
 
 impl ViewState {
@@ -34,6 +43,7 @@ impl ViewState {
         Self {
             forcused_component: None,
             selected_resource: Some(ResourceKind::variants()[0]), // should query
+            last_input_key: Cell::new(None),
         }
     }
 }
@@ -46,6 +56,7 @@ impl View {
                 config.elasticsearch.unwrap_or_default(),
                 tx,
             ),
+            help: HelpComponent::new(),
             state: ViewState::new(),
             style: Styled::new(),
         }
@@ -112,21 +123,33 @@ impl View {
     where
         B: tui::backend::Backend,
     {
-        let chunks = Layout::default()
-            .direction(Vertical)
-            .margin(0)
-            .constraints([Constraint::Length(3), Constraint::Percentage(100)].as_ref())
-            .split(rect);
+        let (resource_tab_area, resource_area, help_area) = {
+            let chunks = Layout::default()
+                .direction(Vertical)
+                .margin(0)
+                .constraints(
+                    [
+                        Constraint::Length(3),
+                        Constraint::Percentage(85),
+                        Constraint::Min(2 + self.style.box_border_height()),
+                    ]
+                    .as_ref(),
+                )
+                .split(rect);
+            (chunks[0], chunks[1], chunks[2])
+        };
 
-        let mut ctx = ViewContext::new(frame, chunks[0], &self.style);
+        let mut ctx = ViewContext::new(frame, resource_tab_area, &self.style, &self.state);
 
         self.resource_tab.render(&mut ctx);
 
         #[allow(clippy::single_match)]
         match self.resource_tab.selected_resource() {
-            ResourceKind::Elasticsearch => self.elasticsearch.render(ctx.with(chunks[1])),
+            ResourceKind::Elasticsearch => self.elasticsearch.render(ctx.with(resource_area)),
             _ => (),
         }
+
+        self.help.render(ctx.with(help_area))
     }
 }
 
@@ -177,18 +200,40 @@ where
     frame: &'f mut Frame<'b, B>,
     rect: Rect,
     style: &'s Styled,
+    state: &'s ViewState,
 }
 
 impl<'f, 'b, 's, B> ViewContext<'f, 'b, 's, B>
 where
     B: tui::backend::Backend,
 {
-    fn new(frame: &'f mut Frame<'b, B>, rect: Rect, style: &'s Styled) -> Self {
-        Self { frame, rect, style }
+    fn new(
+        frame: &'f mut Frame<'b, B>,
+        rect: Rect,
+        style: &'s Styled,
+        state: &'s ViewState,
+    ) -> Self {
+        Self {
+            frame,
+            rect,
+            style,
+            state,
+        }
     }
 
     fn with(&mut self, rect: Rect) -> &mut Self {
         self.rect = rect;
         self
+    }
+
+    fn navigatable_title<'a>(&self, title: &'a str) -> Spans<'a> {
+        if self.state.forcused_component.is_some() {
+            Spans::from(title)
+        } else {
+            match title.as_ascii_str().ok().and_then(|s| s.get_ascii(0)) {
+                Some(first) => Spans::from(format!("{title}({})", first.to_ascii_lowercase())),
+                None => Spans::from(title),
+            }
+        }
     }
 }

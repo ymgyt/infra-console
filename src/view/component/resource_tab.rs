@@ -81,7 +81,11 @@ impl ResourceTab {
             .collect();
 
         let tab = Tabs::new(tabs)
-            .block(ctx.style.block(self.state.is_focused).title("Resource"))
+            .block(
+                ctx.style
+                    .block(self.state.is_focused)
+                    .title(ctx.navigatable_title("Resource")),
+            )
             .highlight_style(ctx.style.highlight_style())
             .select(self.state.selected);
 

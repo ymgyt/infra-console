@@ -99,8 +99,13 @@ impl InputHandler {
 
             tracing::trace!(?input, "Read input");
 
+            if let Key(ref event) = input {
+                state.last_input_key.set(Some(*event));
+            }
+
             if let Some(command) = self.handle(input, state) {
                 tracing::debug!(?command, "Handle");
+
                 return command;
             }
         }

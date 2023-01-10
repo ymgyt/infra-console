@@ -238,7 +238,7 @@ impl ElasticsearchComponent {
             .block(
                 ctx.style
                     .block(self.state.focused == Some(ClusterList))
-                    .title("Cluster"),
+                    .title(ctx.navigatable_title("Cluster")),
             )
             .highlight_style(ctx.style.highlight_style())
             .highlight_symbol("> ");
@@ -262,7 +262,7 @@ impl ElasticsearchComponent {
             .block(
                 ctx.style
                     .block(self.state.focused == Some(ResourceList))
-                    .title("Elasticsearch"),
+                    .title(ctx.navigatable_title("Elasticsearch")),
             )
             .highlight_style(ctx.style.highlight_style())
             .highlight_symbol("> ");

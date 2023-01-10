@@ -5,6 +5,7 @@ use ascii::AsAsciiStr;
 use crate::view::component::elasticsearch::ElasticsearchComponentKind;
 
 pub(crate) mod elasticsearch;
+pub(crate) mod help;
 pub(crate) mod resource_tab;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
