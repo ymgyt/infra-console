@@ -63,8 +63,8 @@ impl App {
 
                 command = input.read(view.state()) => match command {
                     Command::QuitApp => break,
-                    Command::UnforcusComponent => view.unfocus(),
-                    Command::ForcusComponent(component) => view.focus(component),
+                    Command::UnfocusComponent => view.unfocus(),
+                    Command::FocusComponent(component) => view.focus(component),
                     Command::NavigateComponent(component, navigate) => {
                         OptionFuture::from(view.navigate_component(component,navigate).map(|events| transport.send_requests(events))).await;
                     }

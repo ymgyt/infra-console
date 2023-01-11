@@ -1,4 +1,7 @@
-use std::fmt::{self, Display};
+use std::{
+    cmp,
+    fmt::{self, Display},
+};
 
 use data::Data;
 use tui::{
@@ -9,13 +12,13 @@ use tui::{
     },
     style::{Color, Modifier, Style},
     text::{Span, Text},
-    widgets::{Cell, List, ListItem, ListState, Paragraph, Row, Table},
+    widgets::{Cell, List, ListItem, ListState, Paragraph, Row, Table, TableState},
 };
 use ElasticsearchComponentKind::*;
 use ElasticsearchResourceKind::*;
 
 use crate::{
-    client::elasticsearch::response::CatIndex,
+    client::elasticsearch::response::{CatAlias, CatIndex},
     event::api::{
         elasticsearch::{ElasticsearchRequestEvent, ElasticsearchResponseEvent},
         RequestEvent,
@@ -36,6 +39,8 @@ mod data;
 pub(crate) enum ElasticsearchComponentKind {
     ClusterList,
     ResourceList,
+    AliasTable,
+    IndexTable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +72,8 @@ struct State {
     focused: Option<ElasticsearchComponentKind>,
     cluster_list_state: ListState,
     resource_list_state: ListState,
+    index_table_state: TableState,
+    alias_table_state: TableState,
 }
 
 impl ElasticsearchComponent {
@@ -79,6 +86,12 @@ impl ElasticsearchComponent {
         let mut resource_list_state = ListState::default();
         resource_list_state.select(Some(0));
 
+        let mut index_table_state = TableState::default();
+        index_table_state.select(Some(0));
+
+        let mut alias_table_state = TableState::default();
+        alias_table_state.select(Some(0));
+
         Self {
             configs,
             resources: RESOURCES,
@@ -86,6 +99,8 @@ impl ElasticsearchComponent {
                 focused: None,
                 cluster_list_state,
                 resource_list_state,
+                index_table_state,
+                alias_table_state,
             },
             data: Data::new(),
         }
@@ -98,19 +113,19 @@ impl ElasticsearchComponent {
     }
 
     fn fetch_data(&self) -> Option<Vec<ElasticsearchRequestEvent>> {
-        if let Some(cluster) = self.selected_cluster_name() {
-            match self.selected_resource() {
-                Some(Cluster) => Some(vec![ElasticsearchRequestEvent::FetchCluster {
+        self.selected_cluster_name()
+            .zip(self.selected_resource())
+            .map(|(cluster, r)| match r {
+                Cluster => vec![ElasticsearchRequestEvent::FetchCluster {
                     cluster_name: cluster.to_owned(),
-                }]),
-                Some(Index) => Some(vec![ElasticsearchRequestEvent::FetchIndices {
+                }],
+                Index => vec![ElasticsearchRequestEvent::FetchIndices {
                     cluster_name: cluster.to_owned(),
-                }]),
-                _ => None,
-            }
-        } else {
-            None
-        }
+                }],
+                Alias => vec![ElasticsearchRequestEvent::FetchAliases {
+                    cluster_name: cluster.to_owned(),
+                }],
+            })
     }
 
     pub(crate) fn update_api_response(&mut self, res: ElasticsearchResponseEvent) {
@@ -123,6 +138,11 @@ impl ElasticsearchComponent {
                 cluster_name,
                 response,
             } => self.data.update_indices(cluster_name, response),
+
+            ElasticsearchResponseEvent::Aliases {
+                cluster_name,
+                response,
+            } => self.data.update_aliases(cluster_name, response),
         };
     }
 
@@ -139,18 +159,45 @@ impl ElasticsearchComponent {
         component: ElasticsearchComponentKind,
         navigate: Navigate,
     ) -> Option<impl Iterator<Item = RequestEvent>> {
-        match component {
-            ClusterList => self
-                .state
-                .cluster_list_state
-                .apply(navigate, self.cluster_names().count()),
-            ResourceList => self
-                .state
-                .resource_list_state
-                .apply(navigate, self.resources.len()),
+        let fetch = match component {
+            ClusterList => {
+                self.state
+                    .cluster_list_state
+                    .apply(navigate, self.cluster_names().count());
+                true
+            }
+            ResourceList => {
+                self.state
+                    .resource_list_state
+                    .apply(navigate, self.resources.len());
+                true
+            }
+            IndexTable => {
+                self.state.index_table_state.apply(
+                    navigate,
+                    self.selected_cluster_name()
+                        .and_then(|c| self.data.get_visible_indices(c))
+                        .map(|iter| iter.count())
+                        .unwrap_or(0),
+                );
+                false
+            }
+            AliasTable => {
+                self.state.alias_table_state.apply(
+                    navigate,
+                    self.selected_cluster_name()
+                        .and_then(|c| self.data.get_visible_aliases(c).map(|iter| iter.count()))
+                        .unwrap_or(0),
+                );
+                false
+            }
+        };
+        if fetch {
+            self.fetch_data()
+                .map(|events| events.into_iter().map(RequestEvent::Elasticsearch))
+        } else {
+            None
         }
-        self.fetch_data()
-            .map(|events| events.into_iter().map(RequestEvent::Elasticsearch))
     }
 
     fn cluster_names(&self) -> impl Iterator<Item = &str> {
@@ -189,7 +236,8 @@ impl ElasticsearchComponent {
         match self.selected_resource() {
             Some(Cluster) => self.render_cluster(ctx.with(resource_area)),
             Some(Index) => self.render_index(ctx.with(resource_area)),
-            _ => (),
+            Some(Alias) => self.render_aliases(ctx.with(resource_area)),
+            None => (),
         }
     }
 
@@ -226,7 +274,7 @@ impl ElasticsearchComponent {
             .block(
                 ctx.style
                     .block(self.state.focused == Some(ClusterList))
-                    .title(ctx.navigatable_title("Cluster")),
+                    .title(ctx.navigable_title("Cluster")),
             )
             .highlight_style(ctx.style.highlight_style())
             .highlight_symbol("> ");
@@ -250,7 +298,7 @@ impl ElasticsearchComponent {
             .block(
                 ctx.style
                     .block(self.state.focused == Some(ResourceList))
-                    .title(ctx.navigatable_title("Elasticsearch")),
+                    .title(ctx.navigable_title("Elasticsearch")),
             )
             .highlight_style(ctx.style.highlight_style())
             .highlight_symbol("> ");
@@ -308,12 +356,9 @@ impl ElasticsearchComponent {
     {
         if let Some(indices) = self
             .selected_cluster_name()
-            .and_then(|name| self.data.get_indices(name))
+            .and_then(|name| self.data.get_visible_indices(name))
         {
-            let mut indices: Vec<&CatIndex> = indices
-                .iter()
-                .filter(|index| !index.index.starts_with('.'))
-                .collect();
+            let mut indices: Vec<&CatIndex> = indices.collect();
             indices.sort_unstable_by_key(|index| &index.index);
 
             let num_index = indices.len();
@@ -381,7 +426,7 @@ impl ElasticsearchComponent {
                 Layout::default()
                     .direction(Vertical)
                     .constraints([
-                        Constraint::Length(num_index as u16 + ctx.style.box_border_height()),
+                        Constraint::Length(num_index as u16 + 1 + ctx.style.box_border_height()), // header
                         Constraint::Percentage(100),
                     ])
                     .split(ctx.rect)[0]
@@ -389,13 +434,111 @@ impl ElasticsearchComponent {
 
             let indices = Table::new(rows)
                 .header(header)
-                .block(ctx.style.block(false).title("Indices"))
+                .block(
+                    ctx.style
+                        .block(self.state.focused == Some(IndexTable))
+                        .title(ctx.navigable_title("Index")),
+                )
                 .highlight_style(ctx.style.highlight_style())
                 .highlight_symbol(">")
                 .widths(column_constraints.as_slice());
 
-            // TODO: stateful
-            ctx.frame.render_widget(indices, indices_area);
+            ctx.frame.render_stateful_widget(
+                indices,
+                indices_area,
+                &mut self.state.index_table_state,
+            );
+        } else {
+            let not_found = Paragraph::new(Text::raw("not found"));
+
+            ctx.frame.render_widget(not_found, ctx.rect);
+        }
+    }
+
+    fn render_aliases<B>(&mut self, ctx: &mut ViewContext<B>)
+    where
+        B: tui::backend::Backend,
+    {
+        if let Some(aliases) = self
+            .selected_cluster_name()
+            .and_then(|name| self.data.get_visible_aliases(name))
+        {
+            let mut aliases: Vec<&CatAlias> = aliases.collect();
+            aliases.sort_unstable_by_key(|a| &a.alias);
+
+            let num_aliases = aliases.len();
+            let (_max_alias_width, _max_index_width) =
+                aliases.iter().fold((0, 0), |(max_alias, max_index), a| {
+                    (
+                        cmp::max(max_alias, a.alias.len()),
+                        cmp::max(max_index, a.index.len()),
+                    )
+                });
+
+            // TODO: handle too long alias name.
+            let (header, column_constraints): (Vec<_>, Vec<_>) = [
+                ("  Alias", Constraint::Percentage(30)),
+                ("Index", Constraint::Percentage(30)),
+                ("IsWrite", Constraint::Length(7)),
+                ("Filter", Constraint::Min(10)),
+                ("RoutingIndex", Constraint::Min(12)),
+                ("RoutingSearch", Constraint::Min(13)),
+            ]
+            .into_iter()
+            .map(|(h, c)| {
+                (
+                    Cell::from(h)
+                        .style(Style::default().add_modifier(Modifier::DIM | Modifier::BOLD)),
+                    c,
+                )
+            })
+            .unzip();
+
+            let header = Row::new(header).height(1).bottom_margin(0);
+
+            let rows = aliases.iter().map(|alias| {
+                let cells = vec![
+                    Span::styled(
+                        format!("  {}", alias.alias.as_str()),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(alias.index.as_str(), Style::default()),
+                    Span::styled(alias.is_write_index.as_str(), Style::default()),
+                    Span::styled(alias.filter.as_str(), Style::default()),
+                    Span::styled(alias.routing_index.as_str(), Style::default()),
+                    Span::styled(alias.routing_search.as_str(), Style::default()),
+                ]
+                .into_iter()
+                .map(Cell::from);
+                Row::new(cells).height(1)
+            });
+
+            let aliases_area = {
+                Layout::default()
+                    .direction(Vertical)
+                    .constraints([
+                        Constraint::Length(num_aliases as u16 + 1 + ctx.style.box_border_height()),
+                        Constraint::Percentage(100),
+                    ])
+                    .split(ctx.rect)[0]
+            };
+
+            let aliases = Table::new(rows)
+                .header(header)
+                .block(
+                    ctx.style
+                        .block(self.state.focused == Some(AliasTable))
+                        .title(ctx.navigable_title("Alias")),
+                )
+                .highlight_style(ctx.style.highlight_style())
+                .highlight_symbol(">")
+                .widths(column_constraints.as_slice());
+
+            ctx.frame.render_stateful_widget(
+                aliases,
+                aliases_area,
+                &mut self.state.alias_table_state,
+            );
         } else {
             let not_found = Paragraph::new(Text::raw("not found"));
 
