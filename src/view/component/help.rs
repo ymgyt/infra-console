@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
 use crossterm::event::KeyCode;
-use either::Either;
 use itertools::Itertools;
 use tui::{
     style::{Color, Modifier, Style},
@@ -10,11 +9,8 @@ use tui::{
 };
 
 use crate::{
-    app::TransportStats,
-    event::api::{
-        elasticsearch::{ElasticsearchRequestEvent, ElasticsearchResponseEvent},
-        RequestEvent, ResponseEvent,
-    },
+    app::{TransportResult, TransportStats},
+    event::api::{elasticsearch::ElasticsearchResponseEvent, ResponseEvent},
     view::{component::ResourceKind, ViewContext},
 };
 
@@ -142,53 +138,46 @@ impl HelpComponent {
     }
 }
 
-fn format_transport(t: Either<RequestEvent, ResponseEvent>) -> Spans<'static> {
-    let style = Style::default().add_modifier(Modifier::DIM);
+fn format_transport(t: TransportResult) -> Spans<'static> {
     // need more improvement.
-    match t {
-        Either::Left(r) => match r {
-            RequestEvent::Elasticsearch(e) => match e {
-                ElasticsearchRequestEvent::FetchCluster { cluster_name } => Span::styled(
-                    format!("fetching elasticsearch {cluster_name} /_cluster/health ..."),
-                    style,
-                )
-                .into(),
-                ElasticsearchRequestEvent::FetchIndices { cluster_name } => Span::styled(
-                    format!("fetching elasticsearch {cluster_name} /_cat/indices ..."),
-                    style,
-                )
-                .into(),
-                _ => Spans::from("fetching ..."),
-            },
-        },
-        Either::Right(r) => {
+    let elapsed = t.elapsed();
+    match t.response {
+        Ok(event) => {
             let ok = Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::DIM);
-            match r {
+            let style = Style::default().add_modifier(Modifier::DIM);
+            let mut spans = Spans::from(vec![Span::styled("OK", ok), Span::raw(" ")]);
+            let s = match event {
                 ResponseEvent::Elasticsearch(e) => match e {
-                    ElasticsearchResponseEvent::ClusterHealth { cluster_name, .. } => {
-                        Spans::from(vec![
-                            Span::styled("OK", ok),
-                            Span::raw(" "),
-                            Span::styled(
-                                format!("elasticsearch {cluster_name} /_cluster/health"),
-                                style,
-                            ),
-                        ])
+                    ElasticsearchResponseEvent::ClusterHealth { cluster_name, .. } => Span::styled(
+                        format!("elasticsearch {cluster_name} /_cluster/health"),
+                        style,
+                    ),
+                    ElasticsearchResponseEvent::Indices { cluster_name, .. } => {
+                        Span::styled(format!("elasticsearch {cluster_name} /_cat/indices"), style)
                     }
-                    ElasticsearchResponseEvent::Indices { cluster_name, .. } => Spans::from(vec![
-                        Span::styled("OK", ok),
-                        Span::raw(" "),
-                        Span::styled(format!("elasticsearch {cluster_name} /_cat/indices"), style),
-                    ]),
-                    ElasticsearchResponseEvent::Aliases { cluster_name, .. } => Spans::from(vec![
-                        Span::styled("OK", ok),
-                        Span::raw(" "),
-                        Span::styled(format!("elasticsearch {cluster_name} /_cat/aliases"), style),
-                    ]),
+                    ElasticsearchResponseEvent::Aliases { cluster_name, .. } => {
+                        Span::styled(format!("elasticsearch {cluster_name} /_cat/aliases"), style)
+                    }
                 },
-            }
+            };
+            spans.0.push(s);
+            spans
+                .0
+                .push(Span::styled(format!(" {}ms", elapsed.as_millis()), style));
+            spans
+        }
+        Err(err) => {
+            let err_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+            Spans::from(vec![
+                Span::styled("ERROR", err_style),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{err}"),
+                    Style::default().add_modifier(Modifier::DIM),
+                ),
+            ])
         }
     }
 }

@@ -1,6 +1,7 @@
 use error_stack::{IntoReport, ResultExt};
 use futures::future::OptionFuture;
 use thiserror::Error;
+pub(crate) use transport::{RequestId, TransportResult, TransportStats};
 
 use crate::{
     app::transport::TransportController,
@@ -11,7 +12,6 @@ use crate::{
 };
 
 mod transport;
-pub(crate) use transport::TransportStats;
 
 pub struct App {
     config: Config,
@@ -71,8 +71,15 @@ impl App {
                 },
 
                 Some(res) = transport.recv_response() => {
-                    tracing::debug!(?res, "Receive api response");
-                    view.update_api_response(res);
+                    match res.result {
+                        Ok(event) => {
+                            tracing::debug!(?event, "Receive api response");
+                            view.update_api_response(event);
+                        }
+                        Err(report) => {
+                           tracing::error!(request_id=?res.request_id, "{report:?}");
+                        }
+                    }
                 }
             }
         }

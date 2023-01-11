@@ -6,6 +6,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tracing_futures::Instrument;
 
 use crate::{
+    app::RequestId,
     event::api::elasticsearch::{
         ElasticsearchApiHandler, ElasticsearchRequestEvent, ElasticsearchResponseEvent,
     },
@@ -15,8 +16,20 @@ use crate::{
 pub(crate) mod elasticsearch;
 
 #[derive(Debug, Clone)]
+pub(crate) struct RequestEnvelope {
+    pub(crate) request_id: RequestId,
+    pub(crate) event: RequestEvent,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum RequestEvent {
     Elasticsearch(ElasticsearchRequestEvent),
+}
+
+#[derive(Debug)]
+pub(crate) struct ResponseEnvelope {
+    pub(crate) request_id: RequestId,
+    pub(crate) result: error_stack::Result<ResponseEvent, ApiHandleError>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +42,7 @@ pub(crate) struct ApiHandler {
     elasticsearch: Arc<ElasticsearchApiHandler>,
 }
 
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub(crate) enum ApiHandleError {
     #[error("elasticsearch api error")]
     Elasticsearch,
@@ -47,7 +60,11 @@ impl ApiHandler {
         })
     }
 
-    pub(crate) async fn run(self, mut rx: Receiver<RequestEvent>, res_tx: Sender<ResponseEvent>) {
+    pub(crate) async fn run(
+        self,
+        mut rx: Receiver<RequestEnvelope>,
+        res_tx: Sender<ResponseEnvelope>,
+    ) {
         tracing::info!("ApiHandler running...");
 
         loop {
@@ -65,13 +82,13 @@ impl ApiHandler {
         tracing::info!("Done");
     }
 
-    fn dispatch(&self, req: RequestEvent, res_tx: Sender<ResponseEvent>) {
+    fn dispatch(&self, e: RequestEnvelope, res_tx: Sender<ResponseEnvelope>) {
         // Cloning the entire handler is inefficient, should find a better way.
         let this = self.clone();
         let task = async move {
-            let result = match req {
+            let result = match e.event {
                 RequestEvent::Elasticsearch(req) => {
-                    let span = tracing::info_span!("dispatch",api="elasticsearch",request=?req);
+                    let span = tracing::info_span!("dispatch",api="elasticsearch",request=?req,id=?e.request_id);
                     this.elasticsearch
                         .handle(req)
                         .instrument(span)
@@ -79,12 +96,14 @@ impl ApiHandler {
                         .map(ResponseEvent::Elasticsearch)
                 }
             };
-            match result {
-                Ok(res) => {
-                    res_tx.send(res).await.ok();
-                }
-                Err(report) => tracing::error!("{report:?}"),
-            }
+            // TODO: to chain by futures;
+            res_tx
+                .send(ResponseEnvelope {
+                    request_id: e.request_id,
+                    result,
+                })
+                .await
+                .ok();
         };
 
         tokio::spawn(task);
