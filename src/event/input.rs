@@ -124,7 +124,7 @@ impl InputHandler {
             _ => (),
         }
 
-        match state.forcused_component {
+        match state.focused_component {
             None => match (state.selected_resource, input.key_code()) {
                 (Some(Elasticsearch), Some(KeyCode::Char('c'))) => {
                     return Some(ForcusComponent(ComponentKind::Elasticsearch(

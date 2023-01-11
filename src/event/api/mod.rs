@@ -14,12 +14,12 @@ use crate::{
 
 pub(crate) mod elasticsearch;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum RequestEvent {
     Elasticsearch(ElasticsearchRequestEvent),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ResponseEvent {
     Elasticsearch(ElasticsearchResponseEvent),
 }
@@ -53,7 +53,7 @@ impl ApiHandler {
         loop {
             let req = match rx.recv().await {
                 Some(req) => {
-                    tracing::debug!(?req, "Recieve");
+                    tracing::debug!(?req, "Receive");
                     req
                 }
                 None => break,

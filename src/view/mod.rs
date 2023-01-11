@@ -1,9 +1,8 @@
-use std::cell::Cell;
+use std::{cell::Cell, sync::Arc};
 
 use ascii::AsAsciiStr;
 use component::resource_tab::ResourceTab;
 use crossterm::event::KeyEvent;
-use tokio::sync::mpsc::Sender;
 use tui::{
     layout::{Constraint, Direction::Vertical, Layout, Rect},
     text::Spans,
@@ -11,6 +10,7 @@ use tui::{
 };
 
 use crate::{
+    app::TransportStats,
     event::api::{RequestEvent, ResponseEvent},
     view::{
         component::{
@@ -30,10 +30,11 @@ pub(crate) struct View {
     help: HelpComponent,
     state: ViewState,
     style: Styled,
+    transport_stats: Option<Arc<TransportStats>>,
 }
 
 pub(crate) struct ViewState {
-    pub(crate) forcused_component: Option<ComponentKind>,
+    pub(crate) focused_component: Option<ComponentKind>,
     pub(crate) selected_resource: Option<ResourceKind>,
     pub(crate) last_input_key: Cell<Option<KeyEvent>>,
 }
@@ -41,7 +42,7 @@ pub(crate) struct ViewState {
 impl ViewState {
     fn new() -> Self {
         Self {
-            forcused_component: None,
+            focused_component: None,
             selected_resource: Some(ResourceKind::variants()[0]), // should query
             last_input_key: Cell::new(None),
         }
@@ -49,25 +50,28 @@ impl ViewState {
 }
 
 impl View {
-    pub(crate) fn new(config: Config, tx: Sender<RequestEvent>) -> Self {
+    pub(crate) fn new(config: Config) -> Self {
         Self {
             resource_tab: ResourceTab::new(),
-            elasticsearch: ElasticsearchComponent::new(
-                config.elasticsearch.unwrap_or_default(),
-                tx,
-            ),
+            elasticsearch: ElasticsearchComponent::new(config.elasticsearch.unwrap_or_default()),
             help: HelpComponent::new(),
             state: ViewState::new(),
             style: Styled::new(),
+            transport_stats: None,
         }
     }
 
+    pub(crate) fn with_transport_stats(mut self, stats: Arc<TransportStats>) -> Self {
+        self.transport_stats = Some(stats);
+        self
+    }
+
     /// Init view before into render loop.
-    pub(crate) async fn pre_render_loop(&mut self) {
+    pub(crate) fn pre_render_loop(&mut self) -> Option<impl Iterator<Item = RequestEvent>> {
         #[allow(clippy::single_match)]
         match self.resource_tab.selected_resource() {
-            ResourceKind::Elasticsearch => self.elasticsearch.init_data().await,
-            _ => (),
+            ResourceKind::Elasticsearch => self.elasticsearch.init_data(),
+            _ => None,
         }
     }
 
@@ -75,40 +79,41 @@ impl View {
         &self.state
     }
 
-    pub(crate) fn unforcus(&mut self) {
-        if let Some(focused) = self.state.forcused_component {
+    pub(crate) fn unfocus(&mut self) {
+        if let Some(focused) = self.state.focused_component {
             match focused {
                 ComponentKind::ResourceTab => self.resource_tab.toggle_focus(false),
-                ComponentKind::Elasticsearch(_) => self.elasticsearch.unforcus(),
+                ComponentKind::Elasticsearch(_) => self.elasticsearch.unfocus(),
             }
         }
-        self.state.forcused_component = None;
+        self.state.focused_component = None;
     }
 
-    pub(crate) fn forcus(&mut self, component: ComponentKind) {
+    pub(crate) fn focus(&mut self, component: ComponentKind) {
         // disable current focus.
-        self.unforcus();
+        self.unfocus();
 
         match component {
             ComponentKind::ResourceTab => self.resource_tab.toggle_focus(true),
             ComponentKind::Elasticsearch(component) => self.elasticsearch.focus(component),
         }
 
-        self.state.forcused_component = Some(component);
+        self.state.focused_component = Some(component);
     }
 
-    pub(crate) async fn navigate_component(
+    pub(crate) fn navigate_component(
         &mut self,
         component: ComponentKind,
         navigate: Navigate,
-    ) {
+    ) -> Option<impl Iterator<Item = RequestEvent>> {
         match component {
             ComponentKind::ResourceTab => {
                 self.resource_tab.navigate(navigate);
                 self.state.selected_resource = Some(self.resource_tab.selected_resource());
+                None
             }
             ComponentKind::Elasticsearch(component) => {
-                self.elasticsearch.navigate(component, navigate).await;
+                self.elasticsearch.navigate(component, navigate)
             }
         }
     }
@@ -131,7 +136,7 @@ impl View {
                     [
                         Constraint::Length(3),
                         Constraint::Percentage(85),
-                        Constraint::Min(2 + self.style.box_border_height()),
+                        Constraint::Length(3 + self.style.box_border_height()),
                     ]
                     .as_ref(),
                 )
@@ -149,7 +154,8 @@ impl View {
             _ => (),
         }
 
-        self.help.render(ctx.with(help_area))
+        self.help
+            .render(ctx.with(help_area), self.transport_stats.as_deref())
     }
 }
 
@@ -227,7 +233,7 @@ where
     }
 
     fn navigatable_title<'a>(&self, title: &'a str) -> Spans<'a> {
-        if self.state.forcused_component.is_some() {
+        if self.state.focused_component.is_some() {
             Spans::from(title)
         } else {
             match title.as_ascii_str().ok().and_then(|s| s.get_ascii(0)) {

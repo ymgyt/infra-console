@@ -11,13 +11,13 @@ use crate::{
     event::api::ApiHandleError,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ElasticsearchRequestEvent {
     FetchCluster { cluster_name: String },
     FetchIndices { cluster_name: String },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ElasticsearchResponseEvent {
     ClusterHealth {
         cluster_name: String,

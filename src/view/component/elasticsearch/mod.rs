@@ -1,7 +1,6 @@
 use std::fmt::{self, Display};
 
 use data::Data;
-use tokio::sync::mpsc::Sender;
 use tui::{
     layout::{
         Alignment, Constraint,
@@ -60,7 +59,6 @@ impl Display for ElasticsearchResourceKind {
 pub(crate) struct ElasticsearchComponent {
     configs: Vec<ElasticsearchConfig>,
     resources: &'static [ElasticsearchResourceKind],
-    request_tx: Sender<RequestEvent>,
     state: State,
     data: Data,
 }
@@ -72,7 +70,7 @@ struct State {
 }
 
 impl ElasticsearchComponent {
-    pub(crate) fn new(configs: Vec<ElasticsearchConfig>, request_tx: Sender<RequestEvent>) -> Self {
+    pub(crate) fn new(configs: Vec<ElasticsearchConfig>) -> Self {
         static RESOURCES: &[ElasticsearchResourceKind] = &[Cluster, Index, Alias];
 
         let mut cluster_list_state = ListState::default();
@@ -84,7 +82,6 @@ impl ElasticsearchComponent {
         Self {
             configs,
             resources: RESOURCES,
-            request_tx,
             state: State {
                 focused: None,
                 cluster_list_state,
@@ -95,27 +92,24 @@ impl ElasticsearchComponent {
     }
 
     /// Initialize component data.
-    pub(crate) async fn init_data(&mut self) {
-        self.fetch_data().await;
+    pub(crate) fn init_data(&mut self) -> Option<impl Iterator<Item = RequestEvent>> {
+        self.fetch_data()
+            .map(|events| events.into_iter().map(RequestEvent::Elasticsearch))
     }
 
-    async fn fetch_data(&self) {
+    fn fetch_data(&self) -> Option<Vec<ElasticsearchRequestEvent>> {
         if let Some(cluster) = self.selected_cluster_name() {
             match self.selected_resource() {
-                Some(Cluster) => {
-                    self.request(ElasticsearchRequestEvent::FetchCluster {
-                        cluster_name: cluster.to_owned(),
-                    })
-                    .await;
-                }
-                Some(Index) => {
-                    self.request(ElasticsearchRequestEvent::FetchIndices {
-                        cluster_name: cluster.to_owned(),
-                    })
-                    .await;
-                }
-                _ => (),
+                Some(Cluster) => Some(vec![ElasticsearchRequestEvent::FetchCluster {
+                    cluster_name: cluster.to_owned(),
+                }]),
+                Some(Index) => Some(vec![ElasticsearchRequestEvent::FetchIndices {
+                    cluster_name: cluster.to_owned(),
+                }]),
+                _ => None,
             }
+        } else {
+            None
         }
     }
 
@@ -132,26 +126,19 @@ impl ElasticsearchComponent {
         };
     }
 
-    async fn request(&self, req: ElasticsearchRequestEvent) {
-        self.request_tx
-            .send(RequestEvent::Elasticsearch(req))
-            .await
-            .ok();
-    }
-
     pub(crate) fn focus(&mut self, component: ElasticsearchComponentKind) {
         self.state.focused = Some(component);
     }
 
-    pub(crate) fn unforcus(&mut self) {
+    pub(crate) fn unfocus(&mut self) {
         self.state.focused = None;
     }
 
-    pub(crate) async fn navigate(
+    pub(crate) fn navigate(
         &mut self,
         component: ElasticsearchComponentKind,
         navigate: Navigate,
-    ) {
+    ) -> Option<impl Iterator<Item = RequestEvent>> {
         match component {
             ClusterList => self
                 .state
@@ -162,7 +149,8 @@ impl ElasticsearchComponent {
                 .resource_list_state
                 .apply(navigate, self.resources.len()),
         }
-        self.fetch_data().await;
+        self.fetch_data()
+            .map(|events| events.into_iter().map(RequestEvent::Elasticsearch))
     }
 
     fn cluster_names(&self) -> impl Iterator<Item = &str> {

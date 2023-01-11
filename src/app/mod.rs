@@ -1,16 +1,17 @@
 use error_stack::{IntoReport, ResultExt};
+use futures::future::OptionFuture;
 use thiserror::Error;
-use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
+    app::transport::TransportController,
     config::Config,
-    event::{
-        api::{ApiHandler, RequestEvent, ResponseEvent},
-        input::{self, Command, InputHandler},
-    },
+    event::input::{self, Command, InputHandler},
     terminal::TerminalGuard,
     view::View,
 };
+
+mod transport;
+pub(crate) use transport::TransportStats;
 
 pub struct App {
     config: Config,
@@ -42,10 +43,14 @@ impl App {
             .change_context(AppError::TerminalIo)?;
 
         let mut input = InputHandler::new(input::EventStream::new());
-        let (req_tx, mut res_rx) = Self::init_api_handler(config.clone())?;
-        let mut view = View::new(config, req_tx);
+        let mut transport = TransportController::init(config.clone())?;
+        let mut view = View::new(config).with_transport_stats(transport.stats());
 
-        view.pre_render_loop().await;
+        OptionFuture::from(
+            view.pre_render_loop()
+                .map(|events| transport.send_requests(events)),
+        )
+        .await;
 
         loop {
             terminal
@@ -58,12 +63,14 @@ impl App {
 
                 command = input.read(view.state()) => match command {
                     Command::QuitApp => break,
-                    Command::UnforcusComponent => view.unforcus(),
-                    Command::ForcusComponent(component) => view.forcus(component),
-                    Command::NavigateComponent(component, navigate) => view.navigate_component(component, navigate).await,
+                    Command::UnforcusComponent => view.unfocus(),
+                    Command::ForcusComponent(component) => view.focus(component),
+                    Command::NavigateComponent(component, navigate) => {
+                        OptionFuture::from(view.navigate_component(component,navigate).map(|events| transport.send_requests(events))).await;
+                    }
                 },
 
-                Some(res) = res_rx.recv() => {
+                Some(res) = transport.recv_response() => {
                     tracing::debug!(?res, "Receive api response");
                     view.update_api_response(res);
                 }
@@ -71,20 +78,5 @@ impl App {
         }
 
         Ok(())
-    }
-
-    // Span api handler task, then return channels to communicate.
-    fn init_api_handler(
-        config: Config,
-    ) -> error_stack::Result<(Sender<RequestEvent>, Receiver<ResponseEvent>), AppError> {
-        let (req_tx, req_rx) = mpsc::channel::<RequestEvent>(10);
-        let (res_tx, res_rx) = mpsc::channel::<ResponseEvent>(10);
-
-        let api_handler = ApiHandler::new(config.elasticsearch.unwrap_or_default())
-            .change_context_lazy(|| AppError::ConfigureClient)?;
-
-        tokio::spawn(api_handler.run(req_rx, res_tx));
-
-        Ok((req_tx, res_rx))
     }
 }

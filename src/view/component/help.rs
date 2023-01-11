@@ -1,4 +1,7 @@
+use std::sync::atomic::Ordering;
+
 use crossterm::event::KeyCode;
+use either::Either;
 use itertools::Itertools;
 use tui::{
     style::{Color, Modifier, Style},
@@ -6,7 +9,14 @@ use tui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::view::{component::ResourceKind, ViewContext};
+use crate::{
+    app::TransportStats,
+    event::api::{
+        elasticsearch::{ElasticsearchRequestEvent, ElasticsearchResponseEvent},
+        RequestEvent, ResponseEvent,
+    },
+    view::{component::ResourceKind, ViewContext},
+};
 
 pub(crate) struct HelpComponent {
     common_input_keys: Vec<(KeyCode, Span<'static>)>,
@@ -65,8 +75,36 @@ impl HelpComponent {
         Spans::from(spans)
     }
 
-    pub(crate) fn render<B>(&mut self, ctx: &mut ViewContext<B>)
-    where
+    fn format_transport_stats(&self, stats: &TransportStats) -> Spans {
+        let in_flight = stats.in_flight_requests.load(Ordering::Relaxed);
+
+        let mut s = Spans::from(vec![
+            Span::styled(
+                "in flight req: ",
+                Style::default().add_modifier(Modifier::DIM),
+            ),
+            Span::styled(
+                format!("{in_flight}"),
+                Style::default().add_modifier(if in_flight > 0 {
+                    Modifier::BOLD
+                } else {
+                    Modifier::DIM
+                }),
+            ),
+            Span::raw("  "),
+        ]);
+
+        if let Some(t) = stats.latest_transport() {
+            s.0.extend(format_transport(t).0.into_iter());
+        }
+        s
+    }
+
+    pub(crate) fn render<B>(
+        &mut self,
+        ctx: &mut ViewContext<B>,
+        transport_stats: Option<&TransportStats>,
+    ) where
         B: tui::backend::Backend,
     {
         let last_input_key_code = ctx.state.last_input_key.get().map(|event| event.code);
@@ -86,15 +124,63 @@ impl HelpComponent {
             _ => (),
         }
 
+        if let Some(stats) = transport_stats {
+            lines.push(self.format_transport_stats(stats));
+        }
+
         let help = Paragraph::new(lines)
             .block(
                 Block::default()
                     .borders(Borders::TOP)
-                    .border_style(Style::default().fg(Color::Gray))
-                    .title("Help"),
+                    .border_style(Style::default().fg(Color::DarkGray)),
             )
             .wrap(Wrap { trim: false });
 
         ctx.frame.render_widget(help, ctx.rect)
+    }
+}
+
+fn format_transport(t: Either<RequestEvent, ResponseEvent>) -> Spans<'static> {
+    let style = Style::default().add_modifier(Modifier::DIM);
+    // need more improvement.
+    match t {
+        Either::Left(r) => match r {
+            RequestEvent::Elasticsearch(e) => match e {
+                ElasticsearchRequestEvent::FetchCluster { cluster_name } => Span::styled(
+                    format!("fetching elasticsearch {cluster_name} /_cluster/health ..."),
+                    style,
+                )
+                .into(),
+                ElasticsearchRequestEvent::FetchIndices { cluster_name } => Span::styled(
+                    format!("fetching elasticsearch {cluster_name} /_cat/indices ..."),
+                    style,
+                )
+                .into(),
+            },
+        },
+        Either::Right(r) => {
+            let ok = Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::DIM);
+            match r {
+                ResponseEvent::Elasticsearch(e) => match e {
+                    ElasticsearchResponseEvent::ClusterHealth { cluster_name, .. } => {
+                        Spans::from(vec![
+                            Span::styled("OK", ok),
+                            Span::raw(" "),
+                            Span::styled(
+                                format!("elasticsearch {cluster_name} /_cluster/health"),
+                                style,
+                            ),
+                        ])
+                    }
+                    ElasticsearchResponseEvent::Indices { cluster_name, .. } => Spans::from(vec![
+                        Span::styled("OK", ok),
+                        Span::raw(" "),
+                        Span::styled(format!("elasticsearch {cluster_name} /_cat/indices"), style),
+                    ]),
+                },
+            }
+        }
     }
 }
