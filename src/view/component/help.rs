@@ -48,6 +48,8 @@ impl HelpComponent {
         vec![
             (KeyCode::Char('c'), Span::styled("c: Cluster", s)),
             (KeyCode::Char('e'), Span::styled("e: Elasticsearch", s)),
+            (KeyCode::Char('i'), Span::styled("i: Index", s)),
+            (KeyCode::Char('a'), Span::styled("a: Alias", s)),
         ]
     }
 
@@ -156,6 +158,7 @@ fn format_transport(t: Either<RequestEvent, ResponseEvent>) -> Spans<'static> {
                     style,
                 )
                 .into(),
+                _ => Spans::from("fetching ..."),
             },
         },
         Either::Right(r) => {
@@ -178,6 +181,11 @@ fn format_transport(t: Either<RequestEvent, ResponseEvent>) -> Spans<'static> {
                         Span::styled("OK", ok),
                         Span::raw(" "),
                         Span::styled(format!("elasticsearch {cluster_name} /_cat/indices"), style),
+                    ]),
+                    ElasticsearchResponseEvent::Aliases { cluster_name, .. } => Spans::from(vec![
+                        Span::styled("OK", ok),
+                        Span::raw(" "),
+                        Span::styled(format!("elasticsearch {cluster_name} /_cat/aliases"), style),
                     ]),
                 },
             }

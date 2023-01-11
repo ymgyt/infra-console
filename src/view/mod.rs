@@ -135,8 +135,8 @@ impl View {
                 .constraints(
                     [
                         Constraint::Length(3),
-                        Constraint::Percentage(85),
-                        Constraint::Length(3 + self.style.box_border_height()),
+                        Constraint::Percentage(88),
+                        Constraint::Max(3 + self.style.box_border_height()),
                     ]
                     .as_ref(),
                 )
@@ -167,6 +167,44 @@ pub(crate) enum Navigate {
     Down,
 }
 
+impl Navigate {
+    fn inc(current: usize, len: usize) -> usize {
+        if len == 0 {
+            0
+        } else {
+            (current + 1) % len
+        }
+    }
+    fn inc_opt(current: Option<usize>, len: usize) -> usize {
+        match current {
+            Some(current) => Navigate::inc(current, len),
+            None => 0,
+        }
+    }
+    fn dec(current: usize, len: usize) -> usize {
+        if len == 0 {
+            return 0;
+        }
+        if current == 0 {
+            len - 1
+        } else {
+            current - 1
+        }
+    }
+    fn dec_opt(current: Option<usize>, len: usize) -> usize {
+        match current {
+            Some(current) => Navigate::dec(current, len),
+            None => {
+                if len == 0 {
+                    0
+                } else {
+                    len - 1
+                }
+            }
+        }
+    }
+}
+
 trait ApplyNavigate {
     fn apply(&mut self, navigate: Navigate, len: usize);
 }
@@ -175,25 +213,21 @@ impl ApplyNavigate for tui::widgets::ListState {
     fn apply(&mut self, navigate: Navigate, len: usize) {
         match navigate {
             Navigate::Up => {
-                let i = match self.selected() {
-                    Some(n) => {
-                        if n == 0 {
-                            len - 1
-                        } else {
-                            n - 1
-                        }
-                    }
-                    None => len - 1,
-                };
-                self.select(Some(i));
+                self.select(Some(Navigate::dec_opt(self.selected(), len)));
             }
             Navigate::Down => {
-                let i = match self.selected() {
-                    Some(n) => (n + 1) % len,
-                    None => 0,
-                };
-                self.select(Some(i));
+                self.select(Some(Navigate::inc_opt(self.selected(), len)));
             }
+            _ => (),
+        }
+    }
+}
+
+impl ApplyNavigate for tui::widgets::TableState {
+    fn apply(&mut self, navigate: Navigate, len: usize) {
+        match navigate {
+            Navigate::Up => self.select(Some(Navigate::dec_opt(self.selected(), len))),
+            Navigate::Down => self.select(Some(Navigate::inc_opt(self.selected(), len))),
             _ => (),
         }
     }
@@ -232,7 +266,7 @@ where
         self
     }
 
-    fn navigatable_title<'a>(&self, title: &'a str) -> Spans<'a> {
+    fn navigable_title<'a>(&self, title: &'a str) -> Spans<'a> {
         if self.state.focused_component.is_some() {
             Spans::from(title)
         } else {

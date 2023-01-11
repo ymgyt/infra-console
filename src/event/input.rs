@@ -5,7 +5,10 @@ use KeyCode::*;
 
 use crate::view::{
     component::{
-        elasticsearch::{ElasticsearchComponentKind, ElasticsearchComponentKind::ResourceList},
+        elasticsearch::{
+            ElasticsearchComponentKind,
+            ElasticsearchComponentKind::{AliasTable, IndexTable, ResourceList},
+        },
         ComponentKind, ResourceKind,
     },
     Navigate, ViewState,
@@ -71,8 +74,8 @@ impl InputQuery for Event {
 #[derive(Debug)]
 pub(crate) enum Command {
     QuitApp,
-    UnforcusComponent,
-    ForcusComponent(ComponentKind),
+    UnfocusComponent,
+    FocusComponent(ComponentKind),
     NavigateComponent(ComponentKind, Navigate),
 }
 
@@ -120,22 +123,28 @@ impl InputHandler {
 
         #[allow(clippy::single_match)]
         match input.key_code() {
-            Some(KeyCode::Esc) => return Some(UnforcusComponent),
+            Some(KeyCode::Esc) => return Some(UnfocusComponent),
             _ => (),
         }
 
         match state.focused_component {
             None => match (state.selected_resource, input.key_code()) {
                 (Some(Elasticsearch), Some(KeyCode::Char('c'))) => {
-                    return Some(ForcusComponent(ComponentKind::Elasticsearch(
+                    return Some(FocusComponent(ComponentKind::Elasticsearch(
                         ElasticsearchComponentKind::ClusterList,
                     )))
                 }
                 (Some(Elasticsearch), Some(KeyCode::Char('e'))) => {
-                    return Some(ForcusComponent(ComponentKind::Elasticsearch(ResourceList)))
+                    return Some(FocusComponent(ComponentKind::Elasticsearch(ResourceList)))
+                }
+                (Some(Elasticsearch), Some(Char('i'))) => {
+                    return Some(FocusComponent(ComponentKind::Elasticsearch(IndexTable)))
+                }
+                (Some(Elasticsearch), Some(Char('a'))) => {
+                    return Some(FocusComponent(ComponentKind::Elasticsearch(AliasTable)))
                 }
                 (_, Some(KeyCode::Char('r'))) => {
-                    return Some(ForcusComponent(ComponentKind::ResourceTab))
+                    return Some(FocusComponent(ComponentKind::ResourceTab))
                 }
                 _ => (),
             },

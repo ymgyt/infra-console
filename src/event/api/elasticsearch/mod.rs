@@ -4,7 +4,7 @@ use error_stack::{Report, ResultExt};
 
 use crate::{
     client::elasticsearch::{
-        response::{CatIndices, ClusterHealth},
+        response::{CatAliases, CatIndices, ClusterHealth},
         ElasticsearchClient, ElasticsearchClientError,
     },
     config::ElasticsearchConfig,
@@ -12,9 +12,11 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum ElasticsearchRequestEvent {
     FetchCluster { cluster_name: String },
     FetchIndices { cluster_name: String },
+    FetchAliases { cluster_name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,10 @@ pub(crate) enum ElasticsearchResponseEvent {
     Indices {
         cluster_name: String,
         response: CatIndices,
+    },
+    Aliases {
+        cluster_name: String,
+        response: CatAliases,
     },
 }
 
@@ -81,6 +87,20 @@ impl ElasticsearchApiHandler {
                     .map(|indices| ElasticsearchResponseEvent::Indices {
                         cluster_name,
                         response: indices,
+                    })
+                    .change_context(ApiHandleError::Elasticsearch)
+            }
+            FetchAliases { cluster_name } => {
+                let client = self.lookup_cluster(&cluster_name)?;
+
+                tracing::info!("Fetch aliases...");
+
+                client
+                    .cat_aliases()
+                    .await
+                    .map(|aliases| ElasticsearchResponseEvent::Aliases {
+                        cluster_name,
+                        response: aliases,
                     })
                     .change_context(ApiHandleError::Elasticsearch)
             }

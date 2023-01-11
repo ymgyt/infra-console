@@ -84,7 +84,7 @@ impl ResourceTab {
             .block(
                 ctx.style
                     .block(self.state.is_focused)
-                    .title(ctx.navigatable_title("Resource")),
+                    .title(ctx.navigable_title("Resource")),
             )
             .highlight_style(ctx.style.highlight_style())
             .select(self.state.selected);

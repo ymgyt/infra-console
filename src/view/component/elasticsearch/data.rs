@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tui::{style::Color, text::Text};
 
 use crate::{
-    client::elasticsearch::response::{CatIndices, ClusterHealth},
+    client::elasticsearch::response::{CatAlias, CatAliases, CatIndex, CatIndices, ClusterHealth},
     view::style::Styled,
 };
 
@@ -35,10 +35,28 @@ impl Data {
         self.cluster_data_mut(cluster_name).indices = Some(indices);
     }
 
-    pub(super) fn get_indices(&self, cluster_name: &str) -> Option<&CatIndices> {
+    pub(super) fn get_visible_indices(
+        &self,
+        cluster_name: &str,
+    ) -> Option<impl Iterator<Item = &CatIndex>> {
         self.clusters
             .get(cluster_name)
             .and_then(|c| c.indices.as_ref())
+            .map(|indices| indices.iter().filter(|index| !index.index.starts_with('.')))
+    }
+
+    pub(super) fn update_aliases(&mut self, cluster_name: String, aliases: CatAliases) {
+        self.cluster_data_mut(cluster_name).aliases = Some(aliases);
+    }
+
+    pub(super) fn get_visible_aliases(
+        &self,
+        cluster_name: &str,
+    ) -> Option<impl Iterator<Item = &CatAlias>> {
+        self.clusters
+            .get(cluster_name)
+            .and_then(|c| c.aliases.as_ref())
+            .map(|aliases| aliases.iter().filter(|alias| !alias.alias.starts_with('.')))
     }
 
     fn cluster_data_mut(&mut self, cluster_name: String) -> &mut ClusterData {
@@ -52,6 +70,7 @@ impl Data {
 pub(super) struct ClusterData {
     health: Option<ClusterHealth>,
     indices: Option<CatIndices>,
+    aliases: Option<CatAliases>,
 }
 
 pub(super) struct ClusterHealthFormatter<'a>(pub(super) &'a ClusterHealth, pub(super) &'a Styled);

@@ -40,3 +40,18 @@ pub struct CatIndex {
     pub store_size: String,
     pub uuid: String,
 }
+
+pub type CatAliases = Vec<CatAlias>;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CatAlias {
+    pub alias: String,
+    pub filter: String,
+    pub index: String,
+    /// "true" / "false"
+    pub is_write_index: String,
+    #[serde(rename = "routing.index")]
+    pub routing_index: String,
+    #[serde(rename = "routing.search")]
+    pub routing_search: String,
+}

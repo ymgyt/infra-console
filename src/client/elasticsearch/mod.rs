@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use elasticsearch::{
     auth::Credentials,
-    cat::CatIndicesParts,
+    cat::{CatAliasesParts, CatIndicesParts},
     cluster::ClusterHealthParts,
     http::transport::Transport,
     indices::IndicesGetParts,
@@ -102,7 +102,29 @@ impl ElasticsearchClient {
             .change_context(ElasticsearchClientError::DeserializeResponse)
     }
 
-    // https://www.elastic.co/guide/en/elasticsearch/reference/8.5/indices-get-index.html
+    /// https://www.elastic.co/guide/en/elasticsearch/reference/current/cat-alias.html
+    pub(crate) async fn cat_aliases(
+        &self,
+    ) -> error_stack::Result<response::CatAliases, ElasticsearchClientError> {
+        self.inner
+            .cat()
+            .aliases(CatAliasesParts::None)
+            .format("json")
+            .local(false)
+            .v(true)
+            .human(false)
+            .request_timeout(self.default_timeout)
+            .send()
+            .await
+            .into_report()
+            .change_context(ElasticsearchClientError::ApiRequest)?
+            .json::<response::CatAliases>()
+            .await
+            .into_report()
+            .change_context(ElasticsearchClientError::DeserializeResponse)
+    }
+
+    /// https://www.elastic.co/guide/en/elasticsearch/reference/8.5/indices-get-index.html
     pub async fn get_all_indices(&self) {
         //   features()の引数に複数のFeatureを渡せないので、default値のaliases,mappings,settingsを暗黙的に利用する
         let response = self
