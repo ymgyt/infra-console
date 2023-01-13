@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
 /// https://www.elastic.co/guide/en/elasticsearch/reference/current/cluster-health.html#cluster-health-api-response-body
@@ -54,4 +56,57 @@ pub struct CatAlias {
     pub routing_index: String,
     #[serde(rename = "routing.search")]
     pub routing_search: String,
+}
+
+/*
+{
+    "index_name": {  index data ... }
+ */
+#[derive(Debug, Clone, Deserialize)]
+pub struct Index {
+    pub aliases: Option<HashMap<String, IndexAlias>>,
+    pub mappings: Option<IndexMappings>,
+    pub settings: Option<Settings>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IndexAlias {
+    pub is_write_index: Option<bool>,
+    pub filter: Option<Filter>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Filter {
+    term: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IndexMappings {
+    pub dynamic: Option<String>,
+    // TODO: care object(nested property)
+    pub properties: HashMap<String, Property>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Property {
+    r#type: Option<String>,
+    format: Option<String>,
+    analyzer: Option<String>,
+    search_analyzer: Option<String>,
+    term_vector: Option<String>,
+    fields: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Settings {
+    pub index: Option<IndexSettings>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IndexSettings {
+    pub creation_date: String,
+    pub number_of_shards: String,
+    pub number_of_replicas: String,
+    pub uuid: String,
+    pub provided_name: String,
 }

@@ -8,10 +8,11 @@ default = ["elasticsearch"]
 
 [dependencies]
 ascii = "1.1.0"
+chrono = "0.4.23"
 crossterm = { version = "0.25.0", features = ["event-stream"] }
 either = "1.8.0"
 elasticsearch = { version = "8.5.0-alpha.1", optional = true, default-features = false, features = ["rustls-tls"] }
-error-stack = "0.2.4"
+error-stack = { version = "0.2.4", default-features = false, features = ["std", "spantrace"] }
 futures = "0.3.25"
 humansize = "2.1.3"
 itertools = "0.10.5"

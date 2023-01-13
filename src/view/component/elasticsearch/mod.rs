@@ -6,7 +6,7 @@ use std::{
 use data::Data;
 use tui::{
     layout::{
-        Alignment, Constraint,
+        Alignment, Constraint, Direction,
         Direction::{Horizontal, Vertical},
         Layout,
     },
@@ -25,10 +25,12 @@ use crate::{
     },
     view::{
         component::{
-            elasticsearch::data::{health_color, humanize_str_bytes, ClusterHealthFormatter},
+            elasticsearch::data::{
+                health_color, humanize_str_bytes, parse_utc, ClusterHealthFormatter,
+            },
             StringUtil,
         },
-        ApplyNavigate, Navigate, ViewContext,
+        ApplyNavigate, Navigate, Navigated, ViewContext,
     },
     ElasticsearchConfig,
 };
@@ -41,6 +43,7 @@ pub(crate) enum ElasticsearchComponentKind {
     ResourceList,
     AliasTable,
     IndexTable,
+    IndexDetail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +64,19 @@ impl Display for ElasticsearchResourceKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TableFilter {
+    Internal,
+}
+
+impl TableFilter {
+    pub(super) fn apply(&self, item: &str) -> bool {
+        match self {
+            TableFilter::Internal => !item.starts_with('.'),
+        }
+    }
+}
+
 pub(crate) struct ElasticsearchComponent {
     configs: Vec<ElasticsearchConfig>,
     resources: &'static [ElasticsearchResourceKind],
@@ -74,6 +90,9 @@ struct State {
     resource_list_state: ListState,
     index_table_state: TableState,
     alias_table_state: TableState,
+    index_table_filter: Option<TableFilter>,
+    alias_table_filter: Option<TableFilter>,
+    detail_index_name: Option<String>,
 }
 
 impl ElasticsearchComponent {
@@ -101,6 +120,9 @@ impl ElasticsearchComponent {
                 resource_list_state,
                 index_table_state,
                 alias_table_state,
+                index_table_filter: Some(TableFilter::Internal),
+                alias_table_filter: Some(TableFilter::Internal),
+                detail_index_name: None,
             },
             data: Data::new(),
         }
@@ -119,9 +141,15 @@ impl ElasticsearchComponent {
                 Cluster => vec![ElasticsearchRequestEvent::FetchCluster {
                     cluster_name: cluster.to_owned(),
                 }],
-                Index => vec![ElasticsearchRequestEvent::FetchIndices {
-                    cluster_name: cluster.to_owned(),
-                }],
+                Index => match self.state.detail_index_name.as_ref() {
+                    Some(task) => vec![ElasticsearchRequestEvent::FetchIndex {
+                        cluster_name: cluster.to_owned(),
+                        index: task.to_owned(),
+                    }],
+                    None => vec![ElasticsearchRequestEvent::FetchIndices {
+                        cluster_name: cluster.to_owned(),
+                    }],
+                },
                 Alias => vec![ElasticsearchRequestEvent::FetchAliases {
                     cluster_name: cluster.to_owned(),
                 }],
@@ -138,11 +166,15 @@ impl ElasticsearchComponent {
                 cluster_name,
                 response,
             } => self.data.update_indices(cluster_name, response),
-
             ElasticsearchResponseEvent::Aliases {
                 cluster_name,
                 response,
             } => self.data.update_aliases(cluster_name, response),
+            ElasticsearchResponseEvent::Index {
+                cluster_name,
+                index,
+                response,
+            } => self.data.update_index(cluster_name, index, response),
         };
     }
 
@@ -154,6 +186,39 @@ impl ElasticsearchComponent {
         self.state.focused = None;
     }
 
+    pub(crate) fn enter(
+        &mut self,
+        component: ElasticsearchComponentKind,
+    ) -> Option<impl Iterator<Item = RequestEvent>> {
+        let fetch = match component {
+            IndexDetail => {
+                self.selected_cluster_name()
+                    .zip(self.state.index_table_state.selected())
+                    .and_then(|(cluster_name, idx)| {
+                        self.data
+                            .get_visible_indices(cluster_name, self.state.index_table_filter)
+                            .and_then(|mut iter| iter.nth(idx))
+                    })
+                    .into_iter()
+                    .for_each(|index| self.state.detail_index_name = Some(index.index.clone()));
+                true
+            }
+            _ => false,
+        };
+        if fetch {
+            self.fetch_data()
+                .map(|events| events.into_iter().map(RequestEvent::Elasticsearch))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn leave(&mut self, component: ElasticsearchComponentKind) {
+        if component == ElasticsearchComponentKind::IndexDetail {
+            self.state.detail_index_name = None;
+        }
+    }
+
     pub(crate) fn navigate(
         &mut self,
         component: ElasticsearchComponentKind,
@@ -163,20 +228,24 @@ impl ElasticsearchComponent {
             ClusterList => {
                 self.state
                     .cluster_list_state
-                    .apply(navigate, self.cluster_names().count());
-                true
+                    .apply(navigate, self.cluster_names().count())
+                    == Navigated::Happen
             }
             ResourceList => {
                 self.state
                     .resource_list_state
-                    .apply(navigate, self.resources.len());
-                true
+                    .apply(navigate, self.resources.len())
+                    == Navigated::Happen
             }
+
             IndexTable => {
                 self.state.index_table_state.apply(
                     navigate,
                     self.selected_cluster_name()
-                        .and_then(|c| self.data.get_visible_indices(c))
+                        .and_then(|c| {
+                            self.data
+                                .get_visible_indices(c, self.state.index_table_filter)
+                        })
                         .map(|iter| iter.count())
                         .unwrap_or(0),
                 );
@@ -186,11 +255,16 @@ impl ElasticsearchComponent {
                 self.state.alias_table_state.apply(
                     navigate,
                     self.selected_cluster_name()
-                        .and_then(|c| self.data.get_visible_aliases(c).map(|iter| iter.count()))
+                        .and_then(|c| {
+                            self.data
+                                .get_visible_aliases(c, self.state.alias_table_filter)
+                                .map(|iter| iter.count())
+                        })
                         .unwrap_or(0),
                 );
                 false
             }
+            IndexDetail => unreachable!(),
         };
         if fetch {
             self.fetch_data()
@@ -235,7 +309,10 @@ impl ElasticsearchComponent {
 
         match self.selected_resource() {
             Some(Cluster) => self.render_cluster(ctx.with(resource_area)),
-            Some(Index) => self.render_index(ctx.with(resource_area)),
+            Some(Index) => match self.state.detail_index_name.as_deref() {
+                Some(index) => self.render_index_detail(ctx.with(resource_area), index.to_owned()),
+                None => self.render_indices(ctx.with(resource_area)),
+            },
             Some(Alias) => self.render_aliases(ctx.with(resource_area)),
             None => (),
         }
@@ -350,16 +427,15 @@ impl ElasticsearchComponent {
         }
     }
 
-    fn render_index<B>(&mut self, ctx: &mut ViewContext<B>)
+    fn render_indices<B>(&mut self, ctx: &mut ViewContext<B>)
     where
         B: tui::backend::Backend,
     {
-        if let Some(indices) = self
-            .selected_cluster_name()
-            .and_then(|name| self.data.get_visible_indices(name))
-        {
-            let mut indices: Vec<&CatIndex> = indices.collect();
-            indices.sort_unstable_by_key(|index| &index.index);
+        if let Some(indices) = self.selected_cluster_name().and_then(|name| {
+            self.data
+                .get_visible_indices(name, self.state.index_table_filter)
+        }) {
+            let indices: Vec<&CatIndex> = indices.collect();
 
             let num_index = indices.len();
             let max_index_width = indices
@@ -368,8 +444,13 @@ impl ElasticsearchComponent {
                 .max()
                 .unwrap_or(10);
 
+            let selected_index = self.state.index_table_state.selected().unwrap_or(0) + 1;
+            let index_header = format!("  Index({selected_index}/{num_index})");
             let (header, column_constraints): (Vec<_>, Vec<_>) = [
-                ("  Index", Constraint::Length(max_index_width as u16)),
+                (
+                    index_header.as_str(),
+                    Constraint::Length(max_index_width as u16),
+                ),
                 ("Health", Constraint::Length(6)),
                 ("Status", Constraint::Length(6)),
                 ("Primary", Constraint::Length(7)),
@@ -459,12 +540,11 @@ impl ElasticsearchComponent {
     where
         B: tui::backend::Backend,
     {
-        if let Some(aliases) = self
-            .selected_cluster_name()
-            .and_then(|name| self.data.get_visible_aliases(name))
-        {
-            let mut aliases: Vec<&CatAlias> = aliases.collect();
-            aliases.sort_unstable_by_key(|a| &a.alias);
+        if let Some(aliases) = self.selected_cluster_name().and_then(|name| {
+            self.data
+                .get_visible_aliases(name, self.state.alias_table_filter)
+        }) {
+            let aliases: Vec<&CatAlias> = aliases.collect();
 
             let num_aliases = aliases.len();
             let (_max_alias_width, _max_index_width) =
@@ -476,8 +556,10 @@ impl ElasticsearchComponent {
                 });
 
             // TODO: handle too long alias name.
+            let selected_index = self.state.alias_table_state.selected().unwrap_or(0) + 1;
+            let alias_header = format!("  Alias({selected_index}/{num_aliases})");
             let (header, column_constraints): (Vec<_>, Vec<_>) = [
-                ("  Alias", Constraint::Percentage(30)),
+                (alias_header.as_str(), Constraint::Percentage(30)),
                 ("Index", Constraint::Percentage(30)),
                 ("IsWrite", Constraint::Length(7)),
                 ("Filter", Constraint::Min(10)),
@@ -543,6 +625,62 @@ impl ElasticsearchComponent {
             let not_found = Paragraph::new(Text::raw("not found"));
 
             ctx.frame.render_widget(not_found, ctx.rect);
+        }
+    }
+
+    fn render_index_detail<B>(&mut self, ctx: &mut ViewContext<B>, index: String)
+    where
+        B: tui::backend::Backend,
+    {
+        let index = match self
+            .selected_cluster_name()
+            .and_then(|cluster| self.data.get_index(cluster, index.as_str()))
+        {
+            Some(index) => index,
+            None => {
+                let not_found = Paragraph::new(Text::raw("not found"));
+
+                ctx.frame.render_widget(not_found, ctx.rect);
+                return;
+            }
+        };
+
+        let (settings_area, _mappings_area, _aliases_area) = {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(
+                    [
+                        Constraint::Length(5 + ctx.style.box_border_height()),
+                        Constraint::Percentage(40),
+                        Constraint::Percentage(40),
+                    ]
+                    .as_ref(),
+                )
+                .split(ctx.rect);
+            (chunks[0], chunks[1], chunks[2])
+        };
+
+        if let Some(settings) = index.settings.as_ref().and_then(|s| s.index.as_ref()) {
+            let creation_date = parse_utc(settings.creation_date.as_str())
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| settings.creation_date.clone());
+
+            let settings = Text::from(vec![
+                ctx.style
+                    .key_value_spans("provided_name", settings.provided_name.as_str()),
+                ctx.style.key_value_spans("uuid", settings.uuid.as_str()),
+                ctx.style.key_value_spans("creation_date", creation_date),
+                ctx.style
+                    .key_value_spans("number_of_shards", settings.number_of_shards.as_str()),
+                ctx.style
+                    .key_value_spans("number_of_replicas", settings.number_of_replicas.as_str()),
+            ]);
+
+            let settings = Paragraph::new(settings)
+                .block(ctx.style.block(false).title("Settings"))
+                .alignment(Alignment::Left);
+
+            ctx.frame.render_widget(settings, settings_area);
         }
     }
 }

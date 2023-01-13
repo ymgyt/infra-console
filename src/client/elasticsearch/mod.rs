@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use elasticsearch::{
     auth::Credentials,
@@ -6,9 +6,10 @@ use elasticsearch::{
     cluster::ClusterHealthParts,
     http::transport::Transport,
     indices::IndicesGetParts,
-    params::{Bytes, ExpandWildcards, Level},
+    params::{Bytes, Level},
 };
-use error_stack::{IntoReport, ResultExt};
+use error_stack::{IntoReport, Report, ResultExt};
+use futures::{FutureExt, TryFutureExt};
 use thiserror::Error;
 
 use crate::ElasticsearchConfig;
@@ -93,13 +94,11 @@ impl ElasticsearchClient {
             .human(false) // ignored in case of json.
             .request_timeout(self.default_timeout)
             .send()
+            .map(|result| result.and_then(|res| res.error_for_status_code()))
+            .and_then(|res| res.json::<response::CatIndices>())
             .await
             .into_report()
-            .change_context(ElasticsearchClientError::ApiRequest)?
-            .json::<response::CatIndices>()
-            .await
-            .into_report()
-            .change_context(ElasticsearchClientError::DeserializeResponse)
+            .change_context(ElasticsearchClientError::ApiRequest)
     }
 
     /// https://www.elastic.co/guide/en/elasticsearch/reference/current/cat-alias.html
@@ -115,40 +114,61 @@ impl ElasticsearchClient {
             .human(false)
             .request_timeout(self.default_timeout)
             .send()
+            .map(|result| result.and_then(|res| res.error_for_status_code()))
+            .and_then(|res| res.json::<response::CatAliases>())
             .await
             .into_report()
-            .change_context(ElasticsearchClientError::ApiRequest)?
-            .json::<response::CatAliases>()
-            .await
-            .into_report()
-            .change_context(ElasticsearchClientError::DeserializeResponse)
+            .change_context(ElasticsearchClientError::ApiRequest)
     }
 
-    /// https://www.elastic.co/guide/en/elasticsearch/reference/8.5/indices-get-index.html
-    pub async fn get_all_indices(&self) {
-        //   features()の引数に複数のFeatureを渡せないので、default値のaliases,mappings,settingsを暗黙的に利用する
-        let response = self
+    pub(crate) async fn get_index(
+        &self,
+        index: &str,
+    ) -> error_stack::Result<response::Index, ElasticsearchClientError> {
+        type Payload = HashMap<String, response::Index>;
+
+        let mut payload = self
             .inner
             .indices()
-            .get(IndicesGetParts::Index(&["*"]))
-            .allow_no_indices(true)
-            .expand_wildcards(&[ExpandWildcards::Open])
-            .flat_settings(false)
-            .include_defaults(false) // 挙動どうなる?
-            .ignore_unavailable(false)
+            .get(IndicesGetParts::Index(&[index]))
+            .include_defaults(false) // should true ?
             .local(false)
-            .master_timeout(Duration::from_secs(10).into_time_unit().as_str())
+            .request_timeout(self.default_timeout)
             .send()
+            .map(|result| result.and_then(|res| res.error_for_status_code()))
+            .and_then(|res| res.json::<Payload>())
             .await
-            .unwrap();
+            .into_report()
+            .change_context(ElasticsearchClientError::ApiRequest)?;
 
-        let body = response.json::<serde_json::Value>().await.unwrap();
-        let pretty = serde_json::to_string_pretty(&body).unwrap();
-        println!("{pretty}");
+        match payload.remove(index) {
+            Some(res) => Ok(res),
+            None => Err(Report::new(ElasticsearchClientError::ApiRequest))
+                .attach_printable_lazy(|| "response does not contain expected index"),
+        }
+    }
 
-        // let body = response.json::<HashMap<String,serde_json::Value>>().await.unwrap();
-        // let v = body.keys().collect::<Vec<_>>();
-        // println!("{v:#?}");
+    #[allow(dead_code)]
+    pub(crate) async fn dump_index(
+        &self,
+        index: &str,
+    ) -> error_stack::Result<String, ElasticsearchClientError> {
+        let r = self
+            .inner
+            .indices()
+            .get(IndicesGetParts::Index(&[index]))
+            .include_defaults(false) // should true ?
+            .local(false)
+            .flat_settings(false)
+            .request_timeout(self.default_timeout)
+            .send()
+            .map(|result| result.and_then(|res| res.error_for_status_code()))
+            .and_then(|res| res.json::<serde_json::Value>())
+            .await
+            .into_report()
+            .change_context(ElasticsearchClientError::ApiRequest)?;
+
+        Ok(serde_json::to_string_pretty(&r).unwrap())
     }
 }
 

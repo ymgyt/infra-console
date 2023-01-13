@@ -1,15 +1,26 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, TimeZone, Utc};
 use tui::{style::Color, text::Text};
 
 use crate::{
-    client::elasticsearch::response::{CatAlias, CatAliases, CatIndex, CatIndices, ClusterHealth},
-    view::style::Styled,
+    client::elasticsearch::response::{
+        CatAlias, CatAliases, CatIndex, CatIndices, ClusterHealth, Index,
+    },
+    view::{component::elasticsearch::TableFilter, style::Styled},
 };
 
 #[derive(Debug)]
 pub(super) struct Data {
     clusters: HashMap<String, ClusterData>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub(super) struct ClusterData {
+    health: Option<ClusterHealth>,
+    indices: Option<CatIndices>,
+    aliases: Option<CatAliases>,
+    index: HashMap<String, Index>,
 }
 
 impl Data {
@@ -31,32 +42,60 @@ impl Data {
             .and_then(|c| c.health.as_ref())
     }
 
-    pub(super) fn update_indices(&mut self, cluster_name: String, indices: CatIndices) {
+    pub(super) fn update_indices(&mut self, cluster_name: String, mut indices: CatIndices) {
+        indices.sort_unstable_by(|a, b| a.index.cmp(&b.index));
         self.cluster_data_mut(cluster_name).indices = Some(indices);
     }
 
     pub(super) fn get_visible_indices(
         &self,
         cluster_name: &str,
+        filter: Option<TableFilter>,
     ) -> Option<impl Iterator<Item = &CatIndex>> {
         self.clusters
             .get(cluster_name)
             .and_then(|c| c.indices.as_ref())
-            .map(|indices| indices.iter().filter(|index| !index.index.starts_with('.')))
+            .map(|indices| {
+                // need more idiomatic way.
+                indices.iter().filter(move |index| match filter {
+                    Some(filter) => filter.apply(index.index.as_str()),
+                    None => true,
+                })
+            })
     }
 
-    pub(super) fn update_aliases(&mut self, cluster_name: String, aliases: CatAliases) {
+    pub(super) fn update_aliases(&mut self, cluster_name: String, mut aliases: CatAliases) {
+        aliases.sort_unstable_by(|a, b| a.alias.cmp(&b.alias));
         self.cluster_data_mut(cluster_name).aliases = Some(aliases);
     }
 
     pub(super) fn get_visible_aliases(
         &self,
         cluster_name: &str,
+        filter: Option<TableFilter>,
     ) -> Option<impl Iterator<Item = &CatAlias>> {
         self.clusters
             .get(cluster_name)
             .and_then(|c| c.aliases.as_ref())
-            .map(|aliases| aliases.iter().filter(|alias| !alias.alias.starts_with('.')))
+            .map(|aliases| {
+                // need more idiomatic way.
+                aliases.iter().filter(move |alias| match filter {
+                    Some(filter) => filter.apply(alias.alias.as_str()),
+                    None => true,
+                })
+            })
+    }
+
+    pub(super) fn update_index(&mut self, cluster_name: String, name: String, index: Index) {
+        self.cluster_data_mut(cluster_name)
+            .index
+            .insert(name, index);
+    }
+
+    pub(super) fn get_index(&self, cluster_name: &str, index: &str) -> Option<&Index> {
+        self.clusters
+            .get(cluster_name)
+            .and_then(|c| c.index.get(index))
     }
 
     fn cluster_data_mut(&mut self, cluster_name: String) -> &mut ClusterData {
@@ -64,13 +103,6 @@ impl Data {
             .entry(cluster_name)
             .or_insert(ClusterData::default())
     }
-}
-
-#[derive(Debug, Default, Clone)]
-pub(super) struct ClusterData {
-    health: Option<ClusterHealth>,
-    indices: Option<CatIndices>,
-    aliases: Option<CatAliases>,
 }
 
 pub(super) struct ClusterHealthFormatter<'a>(pub(super) &'a ClusterHealth, pub(super) &'a Styled);
@@ -122,4 +154,11 @@ pub(super) fn humanize_str_bytes(s: &str) -> String {
     s.parse::<u64>()
         .map(|n| humansize::format_size(n, humansize::BINARY))
         .unwrap_or_else(|_| "unknown".to_owned())
+}
+
+pub(super) fn parse_utc(timestamp: &str) -> Option<DateTime<Utc>> {
+    timestamp
+        .parse()
+        .ok()
+        .and_then(|t| Utc.timestamp_opt(t, 0).single())
 }

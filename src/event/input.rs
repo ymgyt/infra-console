@@ -77,6 +77,8 @@ pub(crate) enum Command {
     UnfocusComponent,
     FocusComponent(ComponentKind),
     NavigateComponent(ComponentKind, Navigate),
+    Enter(ComponentKind),
+    Leave(ComponentKind),
 }
 
 pub(crate) struct InputHandler {
@@ -114,17 +116,12 @@ impl InputHandler {
         }
     }
 
+    #[allow(clippy::single_match)]
     fn handle(&self, input: Event, state: &ViewState) -> Option<Command> {
         use Command::*;
         use ResourceKind::*;
         if input.should_quit() {
             return Some(QuitApp);
-        }
-
-        #[allow(clippy::single_match)]
-        match input.key_code() {
-            Some(KeyCode::Esc) => return Some(UnfocusComponent),
-            _ => (),
         }
 
         match state.focused_component {
@@ -152,8 +149,30 @@ impl InputHandler {
                 if let Some(navigate) = input.navigate() {
                     return Some(NavigateComponent(component, navigate));
                 }
+                match (component, input.key_code()) {
+                    (
+                        ComponentKind::Elasticsearch(ElasticsearchComponentKind::IndexTable),
+                        Some(KeyCode::Enter),
+                    ) => {
+                        return Some(Enter(ComponentKind::Elasticsearch(
+                            ElasticsearchComponentKind::IndexDetail,
+                        )))
+                    }
+                    _ => (),
+                }
             }
         }
+
+        match input.key_code() {
+            Some(KeyCode::Esc) => {
+                if let Some(entered) = state.entered_component {
+                    return Some(Leave(entered));
+                }
+                return Some(UnfocusComponent);
+            }
+            _ => (),
+        }
+
         None
     }
 }

@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    fmt::Write,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, RwLock,
@@ -7,15 +8,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use error_stack::ResultExt;
+use error_stack::{FrameKind, Report, ResultExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::{
     app::AppError,
     config::Config,
-    event::api::{
-        ApiHandleError, ApiHandler, RequestEnvelope, RequestEvent, ResponseEnvelope, ResponseEvent,
-    },
+    event::api::{ApiHandler, RequestEnvelope, RequestEvent, ResponseEnvelope, ResponseEvent},
 };
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -23,8 +22,8 @@ pub(crate) struct RequestId(u64);
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransportResult {
-    pub(crate) _request: RequestEvent,
-    pub(crate) response: std::result::Result<ResponseEvent, ApiHandleError>,
+    pub(crate) request: RequestEvent,
+    pub(crate) response: std::result::Result<ResponseEvent, String>,
     request_send: Instant,
     response_received: Instant,
 }
@@ -112,11 +111,11 @@ impl TransportController {
 
                     let r = match &res.result {
                         Ok(event) => Ok(event.clone()),
-                        Err(report) => Err(report.current_context().clone()),
+                        Err(report) => Err(format_err_msg(report)),
                     };
 
                     let t = TransportResult {
-                        _request: request,
+                        request,
                         response: r,
                         request_send: requested_at,
                         response_received: now,
@@ -146,4 +145,23 @@ impl TransportController {
         self.next_request_id = RequestId(id.0.saturating_add(1));
         id
     }
+}
+
+// Debug implementation of error_stack::Report may contain terminal control characters,
+// so implement manually.
+fn format_err_msg<T>(r: &Report<T>) -> String {
+    r.frames()
+        .filter_map(|frame| match frame.kind() {
+            FrameKind::Context(context) => Some(context.to_string()),
+            FrameKind::Attachment(_) => None,
+        })
+        .enumerate()
+        .fold(String::new(), |mut s, (idx, frame)| {
+            if idx == 0 {
+                s.write_str(&frame).ok();
+            } else {
+                s.write_str(&format!(" | {frame}")).ok();
+            }
+            s
+        })
 }

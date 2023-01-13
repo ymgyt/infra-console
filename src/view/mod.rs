@@ -35,6 +35,7 @@ pub(crate) struct View {
 
 pub(crate) struct ViewState {
     pub(crate) focused_component: Option<ComponentKind>,
+    pub(crate) entered_component: Option<ComponentKind>,
     pub(crate) selected_resource: Option<ResourceKind>,
     pub(crate) last_input_key: Cell<Option<KeyEvent>>,
 }
@@ -43,6 +44,7 @@ impl ViewState {
     fn new() -> Self {
         Self {
             focused_component: None,
+            entered_component: None,
             selected_resource: Some(ResourceKind::variants()[0]), // should query
             last_input_key: Cell::new(None),
         }
@@ -116,6 +118,25 @@ impl View {
                 self.elasticsearch.navigate(component, navigate)
             }
         }
+    }
+
+    pub(crate) fn enter_component(
+        &mut self,
+        component: ComponentKind,
+    ) -> Option<impl Iterator<Item = RequestEvent>> {
+        self.state.entered_component = Some(component);
+        match component {
+            ComponentKind::ResourceTab => unreachable!(),
+            ComponentKind::Elasticsearch(component) => self.elasticsearch.enter(component),
+        }
+    }
+
+    pub(crate) fn leave_component(&mut self, component: ComponentKind) {
+        match component {
+            ComponentKind::ResourceTab => unreachable!(),
+            ComponentKind::Elasticsearch(component) => self.elasticsearch.leave(component),
+        }
+        self.state.entered_component = None;
     }
 
     pub(crate) fn update_api_response(&mut self, res: ResponseEvent) {
@@ -205,30 +226,44 @@ impl Navigate {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Navigated {
+    Happen,
+    DoesNotHappen,
+}
+
 trait ApplyNavigate {
-    fn apply(&mut self, navigate: Navigate, len: usize);
+    fn apply(&mut self, navigate: Navigate, len: usize) -> Navigated;
 }
 
 impl ApplyNavigate for tui::widgets::ListState {
-    fn apply(&mut self, navigate: Navigate, len: usize) {
+    fn apply(&mut self, navigate: Navigate, len: usize) -> Navigated {
         match navigate {
             Navigate::Up => {
                 self.select(Some(Navigate::dec_opt(self.selected(), len)));
+                Navigated::Happen
             }
             Navigate::Down => {
                 self.select(Some(Navigate::inc_opt(self.selected(), len)));
+                Navigated::Happen
             }
-            _ => (),
+            _ => Navigated::DoesNotHappen,
         }
     }
 }
 
 impl ApplyNavigate for tui::widgets::TableState {
-    fn apply(&mut self, navigate: Navigate, len: usize) {
+    fn apply(&mut self, navigate: Navigate, len: usize) -> Navigated {
         match navigate {
-            Navigate::Up => self.select(Some(Navigate::dec_opt(self.selected(), len))),
-            Navigate::Down => self.select(Some(Navigate::inc_opt(self.selected(), len))),
-            _ => (),
+            Navigate::Up => {
+                self.select(Some(Navigate::dec_opt(self.selected(), len)));
+                Navigated::Happen
+            }
+            Navigate::Down => {
+                self.select(Some(Navigate::inc_opt(self.selected(), len)));
+                Navigated::DoesNotHappen
+            }
+            _ => Navigated::DoesNotHappen,
         }
     }
 }

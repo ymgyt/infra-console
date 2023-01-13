@@ -4,7 +4,7 @@ use error_stack::{Report, ResultExt};
 
 use crate::{
     client::elasticsearch::{
-        response::{CatAliases, CatIndices, ClusterHealth},
+        response::{CatAliases, CatIndices, ClusterHealth, Index},
         ElasticsearchClient, ElasticsearchClientError,
     },
     config::ElasticsearchConfig,
@@ -17,6 +17,7 @@ pub(crate) enum ElasticsearchRequestEvent {
     FetchCluster { cluster_name: String },
     FetchIndices { cluster_name: String },
     FetchAliases { cluster_name: String },
+    FetchIndex { cluster_name: String, index: String },
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,11 @@ pub(crate) enum ElasticsearchResponseEvent {
     Aliases {
         cluster_name: String,
         response: CatAliases,
+    },
+    Index {
+        cluster_name: String,
+        index: String,
+        response: Index,
     },
 }
 
@@ -101,6 +107,28 @@ impl ElasticsearchApiHandler {
                     .map(|aliases| ElasticsearchResponseEvent::Aliases {
                         cluster_name,
                         response: aliases,
+                    })
+                    .change_context(ApiHandleError::Elasticsearch)
+            }
+            FetchIndex {
+                cluster_name,
+                index,
+            } => {
+                let client = self.lookup_cluster(&cluster_name)?;
+
+                tracing::info!("Fetch index...");
+
+                // let dump = client.dump_index(index.as_str()).await.unwrap();
+                //
+                // tracing::info!("{dump}");
+
+                client
+                    .get_index(index.as_str())
+                    .await
+                    .map(|response| ElasticsearchResponseEvent::Index {
+                        cluster_name,
+                        index: index.to_owned(),
+                        response,
                     })
                     .change_context(ApiHandleError::Elasticsearch)
             }

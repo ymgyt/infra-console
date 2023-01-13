@@ -160,6 +160,11 @@ fn format_transport(t: TransportResult) -> Spans<'static> {
                     ElasticsearchResponseEvent::Aliases { cluster_name, .. } => {
                         Span::styled(format!("elasticsearch {cluster_name} /_cat/aliases"), style)
                     }
+                    ElasticsearchResponseEvent::Index {
+                        cluster_name,
+                        index,
+                        ..
+                    } => Span::styled(format!("elasticsearch {cluster_name} /{index}"), style),
                 },
             };
             spans.0.push(s);
@@ -170,11 +175,12 @@ fn format_transport(t: TransportResult) -> Spans<'static> {
         }
         Err(err) => {
             let err_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+            let req = t.request;
             Spans::from(vec![
                 Span::styled("ERROR", err_style),
                 Span::raw("  "),
                 Span::styled(
-                    format!("{err}"),
+                    format!("{req:?} {err}"),
                     Style::default().add_modifier(Modifier::DIM),
                 ),
             ])

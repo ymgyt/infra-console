@@ -68,12 +68,17 @@ impl App {
                     Command::NavigateComponent(component, navigate) => {
                         OptionFuture::from(view.navigate_component(component,navigate).map(|events| transport.send_requests(events))).await;
                     }
+                    Command::Enter(component) => {
+                        OptionFuture::from(view.enter_component(component).map(|events| transport.send_requests(events))).await;
+                    }
+                    Command::Leave(component) =>
+                        view.leave_component(component),
                 },
 
                 Some(res) = transport.recv_response() => {
                     match res.result {
                         Ok(event) => {
-                            tracing::debug!(?event, "Receive api response");
+                            // tracing::debug!(?event, "Receive api response");
                             view.update_api_response(event);
                         }
                         Err(report) => {
